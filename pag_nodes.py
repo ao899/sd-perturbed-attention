@@ -238,9 +238,9 @@ class SlidingWindowGuidanceAdvanced:
             "required": {
                 "model": ("MODEL",),
                 "scale": ("FLOAT", {"default": 5.0, "min": 0.0, "max": 100.0, "step": 0.1, "round": 0.01}),
-                "tile_width": ("INT", {"default": 768, "min": 16, "max": 16384, "step": 8}),
-                "tile_height": ("INT", {"default": 768, "min": 16, "max": 16384, "step": 8}),
-                "tile_overlap": ("INT", {"default": 256, "min": 16, "max": 16384, "step": 8}),
+                "crop_count": ("INT", {"default": 4}),
+                "crop_width": ("INT", {"default": 768, "min": 16, "max": 16384, "step": 8}),
+                "crop_height": ("INT", {"default": 768, "min": 16, "max": 16384, "step": 8}),
                 "sigma_start": ("FLOAT", {"default": -1.0, "min": -1.0, "max": 10000.0, "step": 0.01, "round": False}),
                 "sigma_end": ("FLOAT", {"default": 5.42, "min": -1.0, "max": 10000.0, "step": 0.01, "round": False}),
             },
@@ -255,12 +255,48 @@ class SlidingWindowGuidanceAdvanced:
         self,
         model: ModelPatcher,
         scale: float = 5.0,
-        tile_width: int = 768,
-        tile_height: int = 768,
-        tile_overlap: int = 256,
+        crop_count: int = 4,
+        crop_width: int = 768,
+        crop_height: int = 768,
         sigma_start: float = -1.0,
         sigma_end: float = 5.42,
     ):
+        m = model.clone()
+
+        sigma_start = float("inf") if sigma_start < 0 else sigma_start
+        crop_width = crop_width // 8
+        crop_height = crop_height // 8
+
+        def post_cfg_function(args):
+            """CFG+SEG"""
+            model = args["model"]
+            cond_pred = args["cond_denoised"]
+            cond = args["cond"]
+            cfg_result = args["denoised"]
+            sigma = args["sigma"]
+            model_options = args["model_options"].copy()
+            x = args["input"]
+
+            signal_scale = scale
+
+            if signal_scale == 0 or not (sigma_end < sigma[0] <= sigma_start):
+                return cfg_result
+
+            calc_func = None
+
+            if BACKEND == "ComfyUI":
+                calc_func = partial(calc_cond_batch, model=model, conds=[cond], timestep=sigma, model_options=model_options)
+            if BACKEND in {"Forge", "reForge"}:
+                calc_func = partial(calc_cond_uncond_batch, model=model, cond=cond, uncond=None, timestep=sigma, model_options=model_options)
+
+            swg_pred = swg_pred_calc(x, crop_count, crop_width, crop_height, calc_func)[0]  # type: ignore
+            swg = (cond_pred - swg_pred) * signal_scale
+
+            return cfg_result + swg
+
+        m.set_model_sampler_post_cfg_function(post_cfg_function)
+
+        return (m,)
         m = model.clone()
 
         sigma_start = float("inf") if sigma_start < 0 else sigma_start
