@@ -151,29 +151,27 @@ def seg_attention_wrapper(attention, blur_sigma=1.0):
 
 
 # Modified algorithm from 2411.10257 'The Unreasonable Effectiveness of Guidance for Diffusion Models' (Figure 6.)
-def swg_pred_calc(x: Tensor, tile_width: int, tile_height: int, tile_overlap: int, calc_func: Callable[..., tuple[Tensor]]):
+def swg_pred_calc(x: Tensor, crop_count: int, crop_width: int, crop_height : int, calc_func: Callable[..., tuple[Tensor]]):
+    steps_per_dim = int(math.sqrt(crop_count))
     b, c, h, w = x.shape
     swg_pred = torch.zeros_like(x)
     overlap = torch.zeros_like(x)
-
-    tiles_w = math.ceil(w / (tile_width - tile_overlap))
-    tiles_h = math.ceil(h / (tile_height - tile_overlap))
-
-    for w_i in range(tiles_w):
-        for h_i in range(tiles_h):
-            left, right = tile_width * w_i, tile_width * (w_i + 1) + tile_overlap
-            top, bottom = tile_height * h_i, tile_height * (h_i + 1) + tile_overlap
+    stride_x = (w - crop_width) // (steps_per_dim - 1)
+    stride_y = (h - crop_height) // (steps_per_dim - 1)
+    for i in range(steps_per_dim):
+        for j in range(steps_per_dim):
+            left, right = stride_x * i, stride_x * i + crop_width
+            top, bottom = stride_y * j, stride_y * j + crop_height
 
             x_window = x[:, :, top:bottom, left:right]
-            if x_window.shape[-1] == 0 or x_window.shape[-2] == 0:
-                continue
-
             swg_pred_window = calc_func(x_in=x_window)[0]
             swg_pred[:, :, top:bottom, left:right] += swg_pred_window
 
             overlap_window = torch.ones_like(swg_pred_window)
             overlap[:, :, top:bottom, left:right] += overlap_window
 
+    swg_pred = swg_pred / overlap
+    return swg_pred
     swg_pred = swg_pred / overlap
     return swg_pred
 
